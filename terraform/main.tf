@@ -45,6 +45,9 @@ resource "aws_lambda_function" "verify_fingerprint" {
   handler          = "lambda_function.lambda_handler"
   filename         = "${path.root}/../lambda_function.zip"
   source_code_hash = filebase64sha256("${path.root}/../lambda_function.zip")
+  
+  # Increase timeout to 15 seconds (adjust as needed)
+  timeout          = 15
 
   environment {
     variables = {
@@ -171,13 +174,22 @@ resource "aws_api_gateway_integration_response" "post_integration_response" {
   }
 }
 
+resource "aws_lambda_permission" "api_gateway" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.verify_fingerprint.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.fingerprint_api.execution_arn}/*/*"
+}
+
 # Deployment with triggers for redeployment
 resource "aws_api_gateway_deployment" "deployment" {
   depends_on = [
     aws_api_gateway_integration.verify_fingerprint_integration,
     aws_api_gateway_integration.options_integration,
     aws_api_gateway_integration_response.post_integration_response,
-    aws_api_gateway_integration_response.options_integration_response
+    aws_api_gateway_integration_response.options_integration_response,
+    aws_lambda_permission.api_gateway
   ]
   rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
   stage_name  = "dev"
@@ -191,7 +203,6 @@ resource "aws_api_gateway_deployment" "deployment" {
     ]))
   }
 }
-
 ############################
 # S3 Bucket for Fingerprints
 ############################
