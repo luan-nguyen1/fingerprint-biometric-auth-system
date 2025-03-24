@@ -88,8 +88,13 @@ const FingerprintVerifier = () => {
 
       const data: VerifyResponse = await response.json();
       setResult(`✅ Match: ${data.match}\n📊 Score: ${data.score}\n👤 User ID: ${data.user_id}`);
-    } catch (error: Error) { // Changed from 'any' to 'Error'
-      setResult(`❌ Error: ${error.message}`);
+    } catch (error: unknown) { // Changed from 'Error' to 'unknown'
+      // Safely handle the error by checking its type
+      if (error instanceof Error) {
+        setResult(`❌ Error: ${error.message}`);
+      } else {
+        setResult(`❌ Unknown error occurred`);
+      }
     } finally {
       setLoading(false);
     }
