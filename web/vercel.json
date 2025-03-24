@@ -3,13 +3,16 @@
     "builds": [
       {
         "src": "web/package.json",
-        "use": "@vercel/next"
+        "use": "@vercel/next",
+        "config": {
+          "distDir": "web/.next"
+        }
       }
     ],
     "routes": [
       {
         "src": "/(.*)",
-        "dest": "web/$1"
+        "dest": "/$1"
       }
     ]
   }
