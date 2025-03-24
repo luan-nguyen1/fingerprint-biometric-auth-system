@@ -10,7 +10,6 @@ terraform {
 
 provider "aws" {
   region = "eu-central-1"
-  # profile = "default" # pokud máš nějaký named profile
 }
 
 ############################
@@ -31,7 +30,6 @@ data "aws_iam_policy_document" "lambda_trust" {
   }
 }
 
-# Přidáme základní policy pro logy
 resource "aws_iam_role_policy_attachment" "lambda_basic_logs" {
   role       = aws_iam_role.lambda_exec_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
@@ -76,13 +74,13 @@ resource "aws_api_gateway_rest_api" "fingerprint_api" {
   description = "API for fingerprint authentication"
 }
 
-# Resource: /verify-fingerprint
 resource "aws_api_gateway_resource" "verify_fingerprint_resource" {
   rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
   parent_id   = aws_api_gateway_rest_api.fingerprint_api.root_resource_id
   path_part   = "verify-fingerprint"
 }
 
+# POST Method
 resource "aws_api_gateway_method" "verify_fingerprint_method" {
   rest_api_id   = aws_api_gateway_rest_api.fingerprint_api.id
   resource_id   = aws_api_gateway_resource.verify_fingerprint_resource.id
@@ -99,22 +97,89 @@ resource "aws_api_gateway_integration" "verify_fingerprint_integration" {
   uri                     = aws_lambda_function.verify_fingerprint.invoke_arn
 }
 
-# Permission for API Gateway to invoke Lambda
-resource "aws_lambda_permission" "allow_api_gateway_invoke" {
-  statement_id  = "AllowAPIGatewayInvoke"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.verify_fingerprint.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.fingerprint_api.execution_arn}/*/*"
+resource "aws_api_gateway_method" "options_method" {
+  rest_api_id   = aws_api_gateway_rest_api.fingerprint_api.id
+  resource_id   = aws_api_gateway_resource.verify_fingerprint_resource.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
 }
 
-# Deployment + Stage
+resource "aws_api_gateway_integration" "options_integration" {
+  rest_api_id          = aws_api_gateway_rest_api.fingerprint_api.id
+  resource_id          = aws_api_gateway_resource.verify_fingerprint_resource.id
+  http_method          = aws_api_gateway_method.options_method.http_method
+  type                 = "MOCK"
+  passthrough_behavior = "WHEN_NO_MATCH"
+  
+  request_templates = {
+    "application/json" = jsonencode({
+      statusCode = 200
+    })
+  }
+}
+
+resource "aws_api_gateway_method_response" "options_200" {
+  rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
+  resource_id = aws_api_gateway_resource.verify_fingerprint_resource.id
+  http_method = aws_api_gateway_method.options_method.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true,
+    "method.response.header.Access-Control-Allow-Methods" = true,
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+
+  response_models = {
+    "application/json" = "Empty"
+  }
+}
+
+resource "aws_api_gateway_integration_response" "options_integration_response" {
+  rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
+  resource_id = aws_api_gateway_resource.verify_fingerprint_resource.id
+  http_method = aws_api_gateway_method.options_method.http_method
+  status_code = aws_api_gateway_method_response.options_200.status_code
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+    "method.response.header.Access-Control-Allow-Methods" = "'OPTIONS,POST'",
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+  }
+}
+
+# Add CORS headers to your POST method response
+resource "aws_api_gateway_method_response" "post_method_response" {
+  rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
+  resource_id = aws_api_gateway_resource.verify_fingerprint_resource.id
+  http_method = aws_api_gateway_method.verify_fingerprint_method.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "post_integration_response" {
+  rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
+  resource_id = aws_api_gateway_resource.verify_fingerprint_resource.id
+  http_method = aws_api_gateway_method.verify_fingerprint_method.http_method
+  status_code = aws_api_gateway_method_response.post_method_response.status_code
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = "'*'"
+  }
+}
+
+# Update the deployment to depend on CORS setup
 resource "aws_api_gateway_deployment" "deployment" {
-  depends_on = [aws_api_gateway_integration.verify_fingerprint_integration]
+  depends_on = [
+    aws_api_gateway_integration.verify_fingerprint_integration,
+    aws_api_gateway_integration.options_integration
+  ]
   rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
   stage_name  = "dev"
 }
-
 ############################
 # S3 Bucket for Fingerprints
 ############################
@@ -127,7 +192,6 @@ resource "random_id" "bucket_suffix" {
   byte_length = 4
 }
 
-# Allow public read (optional, for debugging, otherwise not secure)
 resource "aws_s3_bucket_public_access_block" "block_public" {
   bucket = aws_s3_bucket.fingerprint_bucket.id
 
@@ -137,12 +201,11 @@ resource "aws_s3_bucket_public_access_block" "block_public" {
   restrict_public_buckets = false
 }
 
-# Upload reference fingerprint (example image)
 resource "aws_s3_object" "reference_fingerprint" {
   bucket = aws_s3_bucket.fingerprint_bucket.id
-  key    = "reference_fingerprint.png"
+  key    = "101_1.tif"
   source = "${path.root}/../DB1_B/101_1.tif"
-  content_type = "image/png"
+  content_type = "image/tiff"
 }
 
 ############################
@@ -153,7 +216,6 @@ data "aws_iam_policy_document" "lambda_s3_access" {
     actions = [
       "s3:GetObject"
     ]
-
     resources = [
       "${aws_s3_bucket.fingerprint_bucket.arn}/*"
     ]
@@ -175,5 +237,5 @@ resource "aws_iam_role_policy_attachment" "lambda_s3_policy_attach" {
 ############################
 output "api_endpoint" {
   description = "API Gateway endpoint"
-  value       = "${aws_api_gateway_rest_api.fingerprint_api.execution_arn}"
+  value       = "${aws_api_gateway_deployment.deployment.invoke_url}/verify-fingerprint"
 }
