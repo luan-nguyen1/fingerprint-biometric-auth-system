@@ -3,6 +3,13 @@
 import { useState, useRef, useEffect } from 'react';
 import * as UTIF from 'utif';
 
+// Define the shape of the response from the verify-fingerprint API
+interface VerifyResponse {
+  match: boolean;
+  score: number;
+  user_id: string;
+}
+
 const FingerprintVerifier = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [result, setResult] = useState<string | null>(null);
@@ -75,9 +82,13 @@ const FingerprintVerifier = () => {
         }),
       });
 
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
+      const data: VerifyResponse = await response.json();
       setResult(`✅ Match: ${data.match}\n📊 Score: ${data.score}\n👤 User ID: ${data.user_id}`);
-    } catch (error: any) {
+    } catch (error: Error) { // Changed from 'any' to 'Error'
       setResult(`❌ Error: ${error.message}`);
     } finally {
       setLoading(false);
