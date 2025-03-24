@@ -50,18 +50,22 @@ resource "aws_lambda_function" "verify_fingerprint" {
 
   environment {
     variables = {
-      STAGE = "dev"
+      STAGE             = "dev"
+      REFERENCE_BUCKET  = aws_s3_bucket.fingerprint_bucket.bucket
     }
   }
 
-  layers = [aws_lambda_layer_version.opencv_layer.arn]
+  layers = [
+    aws_lambda_layer_version.fingerprint_layer.arn
+  ]
 }
 
-resource "aws_lambda_layer_version" "opencv_layer" {
-  layer_name          = "opencv_layer"
+resource "aws_lambda_layer_version" "fingerprint_layer" {
+  layer_name          = "fingerprint_layer"
   filename            = "${path.root}/../lambda_layer/layer.zip"
   compatible_runtimes = ["python3.11"]
-  description         = "Layer with opencv-python-headless and numpy>=1.24.0 - updated on 2025-03-21T19:50"
+  description         = "Layer with numpy + opencv-python-headless"
+  compatible_architectures = ["arm64"]
 }
 
 ############################
@@ -109,6 +113,61 @@ resource "aws_api_gateway_deployment" "deployment" {
   depends_on = [aws_api_gateway_integration.verify_fingerprint_integration]
   rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
   stage_name  = "dev"
+}
+
+############################
+# S3 Bucket for Fingerprints
+############################
+resource "aws_s3_bucket" "fingerprint_bucket" {
+  bucket = "fingerprint-reference-${random_id.bucket_suffix.hex}"
+  force_destroy = true
+}
+
+resource "random_id" "bucket_suffix" {
+  byte_length = 4
+}
+
+# Allow public read (optional, for debugging, otherwise not secure)
+resource "aws_s3_bucket_public_access_block" "block_public" {
+  bucket = aws_s3_bucket.fingerprint_bucket.id
+
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+# Upload reference fingerprint (example image)
+resource "aws_s3_object" "reference_fingerprint" {
+  bucket = aws_s3_bucket.fingerprint_bucket.id
+  key    = "reference_fingerprint.png"
+  source = "${path.root}/../DB1_B/101_1.tif"
+  content_type = "image/png"
+}
+
+############################
+# IAM Policy for Lambda to access S3
+############################
+data "aws_iam_policy_document" "lambda_s3_access" {
+  statement {
+    actions = [
+      "s3:GetObject"
+    ]
+
+    resources = [
+      "${aws_s3_bucket.fingerprint_bucket.arn}/*"
+    ]
+  }
+}
+
+resource "aws_iam_policy" "lambda_s3_policy" {
+  name        = "lambda-s3-access-fingerprint"
+  policy      = data.aws_iam_policy_document.lambda_s3_access.json
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_s3_policy_attach" {
+  role       = aws_iam_role.lambda_exec_role.name
+  policy_arn = aws_iam_policy.lambda_s3_policy.arn
 }
 
 ############################

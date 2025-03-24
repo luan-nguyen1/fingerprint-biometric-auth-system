@@ -2,14 +2,14 @@
 
 set -e
 
-echo "🔧 Building Lambda layer..."
+echo "🔧 Building combined Lambda layer..."
 
 # Config
 LAYER_DIR="lambda_layer/python"
 REQUIREMENTS_FILE="lambda_layer/requirements.txt"
 OUTPUT_ZIP="lambda_layer/layer.zip"
 
-# Clean old builds
+# Clean previous builds
 echo "🧹 Cleaning previous layer..."
 rm -rf "$LAYER_DIR"
 rm -f "$OUTPUT_ZIP"
@@ -18,7 +18,7 @@ rm -f "$OUTPUT_ZIP"
 echo "📁 Creating directory..."
 mkdir -p "$LAYER_DIR"
 
-# Install dependencies with pip compatible with ARM
+# Install dependencies optimized for Lambda (arm64)
 echo "📦 Installing Python packages for ARM64..."
 pip install \
   --platform manylinux2014_aarch64 \
@@ -34,4 +34,4 @@ cd lambda_layer
 zip -r9 layer.zip python > /dev/null
 cd ..
 
-echo "✅ Done! Lambda layer ready at: $OUTPUT_ZIP"
+echo "✅ Done! Combined Lambda layer ready at: $OUTPUT_ZIP"
