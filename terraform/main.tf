@@ -148,7 +148,7 @@ resource "aws_api_gateway_integration_response" "options_integration_response" {
   }
 }
 
-# Add CORS headers to your POST method response
+# Add CORS headers to POST method response
 resource "aws_api_gateway_method_response" "post_method_response" {
   rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
   resource_id = aws_api_gateway_resource.verify_fingerprint_resource.id
@@ -171,15 +171,27 @@ resource "aws_api_gateway_integration_response" "post_integration_response" {
   }
 }
 
-# Update the deployment to depend on CORS setup
+# Deployment with triggers for redeployment
 resource "aws_api_gateway_deployment" "deployment" {
   depends_on = [
     aws_api_gateway_integration.verify_fingerprint_integration,
-    aws_api_gateway_integration.options_integration
+    aws_api_gateway_integration.options_integration,
+    aws_api_gateway_integration_response.post_integration_response,
+    aws_api_gateway_integration_response.options_integration_response
   ]
   rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
   stage_name  = "dev"
+
+  triggers = {
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_integration.verify_fingerprint_integration,
+      aws_api_gateway_integration.options_integration,
+      aws_api_gateway_method_response.post_method_response,
+      aws_api_gateway_integration_response.post_integration_response
+    ]))
+  }
 }
+
 ############################
 # S3 Bucket for Fingerprints
 ############################
