@@ -12,253 +12,58 @@ provider "aws" {
   region = "eu-central-1"
 }
 
-############################
-# IAM Role for Lambda
-############################
-resource "aws_iam_role" "lambda_exec_role" {
-  name = "lambda_exec_role_fingerprint"
-  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
+module "iam" {
+  source = "./modules/iam"
 }
 
-data "aws_iam_policy_document" "lambda_trust" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
+module "s3" {
+  source = "./modules/s3"
+}
+
+module "dynamodb" {
+  source = "./modules/dynamodb"
+}
+
+module "lambda" {
+  source                 = "./modules/lambda"
+  lambda_exec_role_arn  = module.iam.lambda_exec_role_arn
+  bucket_name           = module.s3.bucket_name
+  traveler_table        = module.dynamodb.table_name
+}
+
+module "api_gateway" {
+  source = "./modules/api_gateway"
+
+  lambda_invoke_arns = {
+    verify_fingerprint   = module.lambda.verify_fingerprint_invoke_arn
+    upload_documents     = module.lambda.upload_documents_invoke_arn
+    extract_face_info    = module.lambda.extract_face_info_invoke_arn
+    traveler_history     = module.lambda.traveler_history_invoke_arn
+    scan_boarding_pass   = module.lambda.scan_boarding_pass_invoke_arn
+    check_global_entry   = module.lambda.check_global_entry_invoke_arn
+    anomaly_check        = module.lambda.anomaly_check_invoke_arn
+    config_admin         = module.lambda.config_admin_invoke_arn
+    access_logs          = module.lambda.access_logs_invoke_arn
+    generate_upload_url  = module.lambda.generate_upload_url_invoke_arn 
+    extract_passport_info = module.lambda.extract_passport_info_invoke_arn
+  }
+
+  lambda_function_names = {
+    verify_fingerprint   = module.lambda.verify_fingerprint_function_name
+    upload_documents     = module.lambda.upload_documents_function_name
+    extract_face_info    = module.lambda.extract_face_info_function_name
+    traveler_history     = module.lambda.traveler_history_function_name
+    scan_boarding_pass   = module.lambda.scan_boarding_pass_function_name
+    check_global_entry   = module.lambda.check_global_entry_function_name
+    anomaly_check        = module.lambda.anomaly_check_function_name
+    config_admin         = module.lambda.config_admin_function_name
+    access_logs          = module.lambda.access_logs_function_name
+    generate_upload_url  = module.lambda.generate_upload_url_function_name 
+    extract_passport_info = module.lambda.extract_passport_info_function_name
   }
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_basic_logs" {
-  role       = aws_iam_role.lambda_exec_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-############################
-# Lambda Function
-############################
-resource "aws_lambda_function" "verify_fingerprint" {
-  function_name    = "verify_fingerprint"
-  role             = aws_iam_role.lambda_exec_role.arn
-  runtime          = "python3.11"
-  handler          = "lambda_function.lambda_handler"
-  filename         = "${path.root}/../lambda_function.zip"
-  source_code_hash = filebase64sha256("${path.root}/../lambda_function.zip")
-  
-  # Increase timeout to 15 seconds (adjust as needed)
-  timeout          = 15
-
-  environment {
-    variables = {
-      STAGE             = "dev"
-      REFERENCE_BUCKET  = aws_s3_bucket.fingerprint_bucket.bucket
-    }
-  }
-
-  layers = [
-    aws_lambda_layer_version.fingerprint_layer.arn
-  ]
-}
-
-resource "aws_lambda_layer_version" "fingerprint_layer" {
-  layer_name          = "fingerprint_layer"
-  filename            = "${path.root}/../lambda_layer/layer.zip"
-  compatible_runtimes = ["python3.11"]
-  description         = "Layer with numpy + opencv-python-headless"
-  compatible_architectures = ["arm64"]
-}
-
-############################
-# API Gateway
-############################
-resource "aws_api_gateway_rest_api" "fingerprint_api" {
-  name        = "FingerprintAuthAPI"
-  description = "API for fingerprint authentication"
-}
-
-resource "aws_api_gateway_resource" "verify_fingerprint_resource" {
-  rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
-  parent_id   = aws_api_gateway_rest_api.fingerprint_api.root_resource_id
-  path_part   = "verify-fingerprint"
-}
-
-# POST Method
-resource "aws_api_gateway_method" "verify_fingerprint_method" {
-  rest_api_id   = aws_api_gateway_rest_api.fingerprint_api.id
-  resource_id   = aws_api_gateway_resource.verify_fingerprint_resource.id
-  http_method   = "POST"
-  authorization = "NONE"
-}
-
-resource "aws_api_gateway_integration" "verify_fingerprint_integration" {
-  rest_api_id             = aws_api_gateway_rest_api.fingerprint_api.id
-  resource_id             = aws_api_gateway_resource.verify_fingerprint_resource.id
-  http_method             = aws_api_gateway_method.verify_fingerprint_method.http_method
-  integration_http_method = "POST"
-  type                    = "AWS_PROXY"
-  uri                     = aws_lambda_function.verify_fingerprint.invoke_arn
-}
-
-resource "aws_api_gateway_method" "options_method" {
-  rest_api_id   = aws_api_gateway_rest_api.fingerprint_api.id
-  resource_id   = aws_api_gateway_resource.verify_fingerprint_resource.id
-  http_method   = "OPTIONS"
-  authorization = "NONE"
-}
-
-resource "aws_api_gateway_integration" "options_integration" {
-  rest_api_id          = aws_api_gateway_rest_api.fingerprint_api.id
-  resource_id          = aws_api_gateway_resource.verify_fingerprint_resource.id
-  http_method          = aws_api_gateway_method.options_method.http_method
-  type                 = "MOCK"
-  passthrough_behavior = "WHEN_NO_MATCH"
-  
-  request_templates = {
-    "application/json" = jsonencode({
-      statusCode = 200
-    })
-  }
-}
-
-resource "aws_api_gateway_method_response" "options_200" {
-  rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
-  resource_id = aws_api_gateway_resource.verify_fingerprint_resource.id
-  http_method = aws_api_gateway_method.options_method.http_method
-  status_code = "200"
-
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = true,
-    "method.response.header.Access-Control-Allow-Methods" = true,
-    "method.response.header.Access-Control-Allow-Origin"  = true
-  }
-
-  response_models = {
-    "application/json" = "Empty"
-  }
-}
-
-resource "aws_api_gateway_integration_response" "options_integration_response" {
-  rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
-  resource_id = aws_api_gateway_resource.verify_fingerprint_resource.id
-  http_method = aws_api_gateway_method.options_method.http_method
-  status_code = aws_api_gateway_method_response.options_200.status_code
-
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-    "method.response.header.Access-Control-Allow-Methods" = "'OPTIONS,POST'",
-    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
-  }
-}
-
-# Add CORS headers to POST method response
-resource "aws_api_gateway_method_response" "post_method_response" {
-  rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
-  resource_id = aws_api_gateway_resource.verify_fingerprint_resource.id
-  http_method = aws_api_gateway_method.verify_fingerprint_method.http_method
-  status_code = "200"
-
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = true
-  }
-}
-
-resource "aws_api_gateway_integration_response" "post_integration_response" {
-  rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
-  resource_id = aws_api_gateway_resource.verify_fingerprint_resource.id
-  http_method = aws_api_gateway_method.verify_fingerprint_method.http_method
-  status_code = aws_api_gateway_method_response.post_method_response.status_code
-
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = "'*'"
-  }
-}
-
-resource "aws_lambda_permission" "api_gateway" {
-  statement_id  = "AllowAPIGatewayInvoke"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.verify_fingerprint.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.fingerprint_api.execution_arn}/*/*"
-}
-
-# Deployment with triggers for redeployment
-resource "aws_api_gateway_deployment" "deployment" {
-  depends_on = [
-    aws_api_gateway_integration.verify_fingerprint_integration,
-    aws_api_gateway_integration.options_integration,
-    aws_api_gateway_integration_response.post_integration_response,
-    aws_api_gateway_integration_response.options_integration_response,
-    aws_lambda_permission.api_gateway
-  ]
-  rest_api_id = aws_api_gateway_rest_api.fingerprint_api.id
-  stage_name  = "dev"
-
-  triggers = {
-    redeployment = sha1(jsonencode([
-      aws_api_gateway_integration.verify_fingerprint_integration,
-      aws_api_gateway_integration.options_integration,
-      aws_api_gateway_method_response.post_method_response,
-      aws_api_gateway_integration_response.post_integration_response
-    ]))
-  }
-}
-############################
-# S3 Bucket for Fingerprints
-############################
-resource "aws_s3_bucket" "fingerprint_bucket" {
-  bucket = "fingerprint-reference-${random_id.bucket_suffix.hex}"
-  force_destroy = true
-}
-
-resource "random_id" "bucket_suffix" {
-  byte_length = 4
-}
-
-resource "aws_s3_bucket_public_access_block" "block_public" {
-  bucket = aws_s3_bucket.fingerprint_bucket.id
-
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
-}
-
-resource "aws_s3_object" "reference_fingerprint" {
-  bucket = aws_s3_bucket.fingerprint_bucket.id
-  key    = "101_1.tif"
-  source = "${path.root}/../DB1_B/101_1.tif"
-  content_type = "image/tiff"
-}
-
-############################
-# IAM Policy for Lambda to access S3
-############################
-data "aws_iam_policy_document" "lambda_s3_access" {
-  statement {
-    actions = [
-      "s3:GetObject"
-    ]
-    resources = [
-      "${aws_s3_bucket.fingerprint_bucket.arn}/*"
-    ]
-  }
-}
-
-resource "aws_iam_policy" "lambda_s3_policy" {
-  name        = "lambda-s3-access-fingerprint"
-  policy      = data.aws_iam_policy_document.lambda_s3_access.json
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_s3_policy_attach" {
-  role       = aws_iam_role.lambda_exec_role.name
-  policy_arn = aws_iam_policy.lambda_s3_policy.arn
-}
-
-############################
-# Outputs
-############################
 output "api_endpoint" {
-  description = "API Gateway endpoint"
-  value       = "${aws_api_gateway_deployment.deployment.invoke_url}/verify-fingerprint"
+  value       = module.api_gateway.endpoint
+  description = "API Gateway invoke URL"
 }

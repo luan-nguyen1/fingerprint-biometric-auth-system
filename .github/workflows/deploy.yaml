@@ -1,0 +1,53 @@
+name: 🚀 Border Control Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-central-1
+  LAMBDAS: |
+    verify_fingerprint
+    upload_documents
+    extract_face_info
+    traveler_history
+    scan_boarding_pass
+    check_global_entry
+    anomaly_check
+    config_admin
+    access_logs
+
+jobs:
+  build-and-deploy:
+    name: 🛠 Build & Deploy Lambdas
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout repo
+        uses: actions/checkout@v3
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+
+      - name: ☁️ Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🔧 Install zip
+        run: sudo apt-get install zip -y
+
+      - name: 🔨 Build Lambda Layer
+        run: ./build_layer.sh
+
+      - name: 🚀 Deploy All Lambda Functions
+        run: |
+          for fn in $LAMBDAS; do
+            echo "▶ Deploying $fn..."
+            ./deploy_lambda.sh $fn
+          done

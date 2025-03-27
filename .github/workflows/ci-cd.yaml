@@ -1,26 +1,46 @@
-name: CI/CD Pipeline
+name: 🚀 Deploy Border Control Infra
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  TF_VERSION: 1.5.7
+  AWS_REGION: eu-central-1
 
 jobs:
-  terraform:
+  deploy:
+    name: 🌍 Terraform Deploy
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: 🧾 Checkout repository
+        uses: actions/checkout@v3
+
+      - name: ☁️ Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
         with:
-          terraform_version: 1.5.0
-      - name: Terraform Init & Validate
-        working-directory: terraform
-        run: |
-          terraform init
-          terraform validate
-          terraform plan
-      # Přidej krok pro automatické nasazení, pokud to chceš
-      #- name: Terraform Apply
-      #  working-directory: terraform
-      #  run: terraform apply -auto-approve
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🧰 Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: 📦 Init Terraform
+        run: terraform -chdir=terraform init
+
+      - name: 🧹 Format Terraform
+        run: terraform -chdir=terraform fmt -check
+
+      - name: ✅ Validate Terraform
+        run: terraform -chdir=terraform validate
+
+      - name: 🔍 Terraform Plan
+        run: terraform -chdir=terraform plan
+
+      - name: 🚀 Terraform Apply
+        run: terraform -chdir=terraform apply -auto-approve

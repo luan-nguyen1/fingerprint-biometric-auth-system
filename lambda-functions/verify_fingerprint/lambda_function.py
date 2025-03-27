@@ -3,24 +3,37 @@ import base64
 import boto3
 import os
 import traceback
+from boto3.dynamodb.conditions import Key
 
+# AWS clients
 s3 = boto3.client('s3')
-REFERENCE_BUCKET = os.environ['REFERENCE_BUCKET']
-REFERENCE_KEY = '101_1.tif'
+dynamodb = boto3.resource('dynamodb')
 
-def get_reference_fingerprint():
+# Environment variables
+REFERENCE_BUCKET = os.environ['REFERENCE_BUCKET']
+TRAVELER_TABLE = os.environ['TRAVELER_TABLE']
+
+def get_reference_fingerprint(s3_key):
     try:
-        obj = s3.get_object(Bucket=REFERENCE_BUCKET, Key=REFERENCE_KEY)
-        print(f"Successfully fetched reference image from S3: {REFERENCE_BUCKET}/{REFERENCE_KEY}")
+        obj = s3.get_object(Bucket=REFERENCE_BUCKET, Key=s3_key)
+        print(f"Fetched reference image: {s3_key}")
         return obj['Body'].read()
     except Exception as e:
-        print(f"Error fetching reference fingerprint from S3: {str(e)}")
-        raise
+        raise RuntimeError(f"Failed to fetch reference image from S3: {e}")
+
+def get_traveler_metadata(passport_no):
+    try:
+        table = dynamodb.Table(TRAVELER_TABLE)
+        response = table.get_item(Key={"passport_no": passport_no})
+        if "Item" not in response:
+            raise KeyError(f"Traveler with passport {passport_no} not found.")
+        return response["Item"]
+    except Exception as e:
+        raise RuntimeError(f"Failed to retrieve traveler metadata: {e}")
 
 def lambda_handler(event, context):
     print("Received event:", json.dumps(event))
-    
-    # Base CORS headers (always returned)
+
     cors_headers = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
@@ -28,72 +41,68 @@ def lambda_handler(event, context):
         'Content-Type': 'application/json'
     }
 
-    # Handle CORS preflight request
     if event.get('httpMethod') == 'OPTIONS':
-        print("Handling OPTIONS preflight request")
+        print("Handling CORS preflight")
         return {
             'statusCode': 200,
             'headers': cors_headers,
-            'body': json.dumps({'message': 'CORS preflight response'})
+            'body': json.dumps({'message': 'CORS preflight accepted'})
         }
 
     try:
-        # Handle both direct invocation and API Gateway proxy
         body = event.get('body', event)
         if isinstance(body, str):
-            print("Parsing body as string")
             body = json.loads(body)
-        else:
-            print("Body is already a dict")
 
-        print("Body parsed:", json.dumps(body))
         fingerprint_encoded = body.get('fingerprint_image')
-        if not fingerprint_encoded:
-            raise ValueError("Missing 'fingerprint_image' in request body")
-        
-        user_id = body.get('user_id', 'user_001')
-        print(f"User ID: {user_id}")
+        passport_no = body.get('passport_no')
 
-        # Decode base64 with padding check
-        print("Decoding base64 image...")
-        try:
-            # Ensure proper padding
-            missing_padding = len(fingerprint_encoded) % 4
-            if missing_padding:
-                fingerprint_encoded += '=' * (4 - missing_padding)
-            received_image = base64.b64decode(fingerprint_encoded)
-            print("Base64 decoding successful")
-        except Exception as e:
-            raise ValueError(f"Base64 decoding failed: {str(e)}")
+        if not fingerprint_encoded or not passport_no:
+            raise ValueError("Missing 'fingerprint_image' or 'passport_no' in request.")
 
-        print("Fetching reference image from S3...")
-        reference_image = get_reference_fingerprint()
+        # Lookup traveler in DynamoDB
+        traveler = get_traveler_metadata(passport_no)
+        reference_key = traveler["reference_key"]
+        user_id = traveler["user_id"]
+        name = traveler["name"]
 
-        print("Matching fingerprints...")
-        # Assuming match_fingerprints exists in the layer or code
+        print(f"Verifying passport {passport_no} (User: {name}, ID: {user_id})")
+
+        # Decode base64
+        missing_padding = len(fingerprint_encoded) % 4
+        if missing_padding:
+            fingerprint_encoded += '=' * (4 - missing_padding)
+        received_image = base64.b64decode(fingerprint_encoded)
+
+        # Load reference fingerprint
+        reference_image = get_reference_fingerprint(reference_key)
+
+        # Match using OpenCV in Lambda layer
         from fingerprint_matching import match_fingerprints
         is_match, score = match_fingerprints(reference_image, received_image)
-        print(f"Fingerprint match result: is_match={is_match}, score={score}")
+
+        print(f"Match result: {is_match} | Score: {score}")
 
         return {
             'statusCode': 200,
             'headers': cors_headers,
             'body': json.dumps({
-                'user_id': user_id,
                 'match': is_match,
-                'score': score
+                'score': score,
+                'user_id': user_id,
+                'name': name,
+                'passport_no': passport_no
             })
         }
-        
+
     except Exception as e:
-        print(f"Error in Lambda execution: {str(e)}")
-        print("Traceback:", traceback.format_exc())
+        print("Error occurred:", str(e))
         return {
             'statusCode': 500,
-            'headers': cors_headers,  # CORS headers even on error
+            'headers': cors_headers,
             'body': json.dumps({
                 'error': str(e),
-                'message': 'Error processing fingerprint',
+                'message': 'Failed to verify traveler.',
                 'traceback': traceback.format_exc()
             })
         }
